@@ -48,8 +48,8 @@ form::form(QWidget *parent)
 
     timer = new QTimer();
     connect(timer,&QTimer::timeout,this,&form::OnTimer);
-    //timer->setInterval(360000);
-    timer->setInterval(30000);
+    timer->setInterval(360000);
+    //timer->setInterval(30000);
     timer->start();
 
     randomMessages.append("Говорят, что чёрные кошки к несчастью\n Наверное, у этих глупышей просто не было чёрной кошки");
@@ -250,19 +250,16 @@ void form::sendEmail()
 
     for(int i = 0; i < RecieversList.recievers.size(); i++) {
 
-        SmtpClient *smtp = new SmtpClient(m_smtp_server, m_smtp_port, SmtpClient::SslConnection);
-        smtp->setUser(m_login);
-        smtp->setPassword(m_password);
 
             // Create a MimeMessage
 
         MimeMessage message;
 
         EmailAddress sender(m_login, "Планировщик");
-        message.setSender(&sender);
+        message.setSender(sender);
 
         EmailAddress to(RecieversList.recievers[i], "Получатель");
-        message.addRecipient(&to);
+        message.addRecipient(to);
 
         message.setSubject("Задачи на сегодня");
 
@@ -294,13 +291,27 @@ void form::sendEmail()
 
              // Now we can send the mail
 
-        smtp->connectToHost();
-        smtp->login();
-        smtp->sendMail(message);
+        SmtpClient smtp(m_smtp_server, m_smtp_port, SmtpClient::SslConnection);
 
-        smtp->quit();
+        smtp.connectToHost();
+        if (!smtp.waitForReadyConnected()) {
+            writeLog("Failed to connect to host!");
+            return;
+        }
+        smtp.login(m_login,m_password);
+        if (!smtp.waitForAuthenticated()) {
+            writeLog("Failed to login!");
+            return;
+        }
+        smtp.sendMail(message);
+        if (!smtp.waitForMailSent()) {
+            writeLog("Failed to send a mail!");
+            return;
+        }
 
-        delete smtp;
+        smtp.quit();
+        writeLog("Message is sent!");
+
     }
 }
 

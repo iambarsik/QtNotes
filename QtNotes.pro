@@ -41,6 +41,7 @@ FORMS += \
     recieverslist.ui
 
 LIBS += $$PWD/SMTPEmail.dll
+LIBS += $$PWD/SmtpMime2.dll
 
 # Default rules for deployment.
 qnx: target.path = /tmp/$${TARGET}/bin
