@@ -96,6 +96,7 @@ form::form(QWidget *parent)
     this->setWindowIcon(QIcon(":/images/app.ico"));
 
     writeLog(" ============ Начало работы =============");
+    qDebug() << QSslSocket::supportsSsl() << QSslSocket::sslLibraryBuildVersionString() << QSslSocket::sslLibraryVersionString();
 
     refreshTable();
 
