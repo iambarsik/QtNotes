@@ -40,8 +40,10 @@ FORMS += \
     loadingform.ui \
     recieverslist.ui
 
-LIBS += $$PWD/SMTPEmail.dll
-LIBS += $$PWD/SmtpMime2.dll
+RC_FILE += app.rc
+
+#LIBS += $$PWD/SMTPEmail.dll
+LIBS += $$PWD/bin/SMTPMime2.dll
 
 # Default rules for deployment.
 qnx: target.path = /tmp/$${TARGET}/bin
@@ -53,3 +55,5 @@ RESOURCES += \
 
 BIN_PATH = $$PWD/bin/
 DESTDIR = $${BIN_PATH}/
+
+

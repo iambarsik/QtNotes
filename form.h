@@ -73,6 +73,8 @@ private:
 
     bool bNeedToEMail;
 
+    int PopupPeriod;
+
     QString m_log_name;
 
     QString m_smtp_server;

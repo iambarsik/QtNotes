@@ -7,6 +7,8 @@ form::form(QWidget *parent)
 {
     ui->setupUi(this);
 
+    PopupPeriod = 60;
+
     QString SettingsName = "config.ini";
     QSettings settings(SettingsName, QSettings::IniFormat);
     settings.setIniCodec(QTextCodec::codecForName("UTF-8"));
@@ -17,6 +19,7 @@ form::form(QWidget *parent)
         settings.setValue("port",465);
         settings.setValue("login","");
         settings.setValue("password","");
+        settings.setValue("note_period","60");
         settings.endGroup();
     }
     settings.beginGroup("MAIN_SETTINGS");
@@ -24,6 +27,7 @@ form::form(QWidget *parent)
     m_smtp_port   = (settings.value("port", 465)).toInt();
     m_login       = (settings.value("login", "")).toString();
     m_password    = (settings.value("password", "")).toString();
+    PopupPeriod   = (settings.value("note_period", 60)).toInt();
     settings.endGroup();
 
     if(m_login.isEmpty() || m_password.isEmpty())   {
@@ -48,7 +52,8 @@ form::form(QWidget *parent)
 
     timer = new QTimer();
     connect(timer,&QTimer::timeout,this,&form::OnTimer);
-    timer->setInterval(360000);
+
+    timer->setInterval(PopupPeriod*1000);
     //timer->setInterval(30000);
     timer->start();
 
@@ -88,7 +93,7 @@ form::form(QWidget *parent)
             bNeedToEMail = true;
         }
     }    
-    this->setWindowIcon(QIcon(":/images/icon.ico"));
+    this->setWindowIcon(QIcon(":/images/app.ico"));
 
     writeLog(" ============ Начало работы =============");
 
@@ -244,22 +249,118 @@ void form::closeEvent(QCloseEvent *event)
 
 void form::sendEmail()
 {
-    if(RecieversList.recievers.size() <= 0)
+    if(RecieversList.recievers.size() <= 0) {
+        writeLog("Нет ни одного получателя. Сообщение не отправлено.");
         return;
+    }
+
+    EmailAddress sender = EmailAddress(m_login, "Планировщик задач");
+    QString subject = "Задачи на сегодня";
+
+    QDate d = QDate::currentDate();
+    date_t dt = date_t(d.day(),d.month(),d.year());
+
+    QString html;
+    html += "<h2><b> Перечень запланированных задач на сегодня: </b></h2><p><ul>";
+    for(int i = 0; i < events_list_current.size(); i++) {
+        if(dt > events_list_current[i].Date)    {
+            html += "<h5><font color=FF0000> !!!ПРОСРОЧЕНО!!! - " + events_list_current[i].Text + "</font></h5>";
+        } else {
+            html += "<h5><font color=000000>" + events_list_current[i].Text + "</font></h5>";
+        }
+    }
+    html += "</ul>";
+    html += "<h4>Примечание:</h4> отправлено рассылкой SMTP из приложения QtNotes c аккаунта \"" + m_login + "\"";
+
+    SmtpClient smtp(m_smtp_server, m_smtp_port, SmtpClient::SslConnection);
+    MimeMessage message;
+    message.setSender(sender);
+    message.setSubject(subject);
+    for(int i = 0; i < RecieversList.recievers.size(); i++) {
+        message.addRecipient(EmailAddress(RecieversList.recievers[i]));
+    }
+    MimeHtml content;
+    content.setHtml(html);
+    message.addPart(&content);
+
+    /*
+    QList<QFile*> files;
+    QList<MimeAttachment*> attachments;
+    for (int i = 0; i < ui->attachments->count(); ++i)
+    {
+        QFile* file = new QFile(ui->attachments->item(i)->text());
+        files.append(file);
+
+        MimeAttachment* attachment = new MimeAttachment(file);
+        attachments.append(attachment);
+
+        message.addPart(attachment);
+    }
+    */
+
+    qDebug() << m_login;
+    writeLog(m_login);
+    qDebug() << m_password;
+    writeLog(m_password);
+    qDebug() << m_smtp_server;
+    writeLog(m_smtp_server);
+    qDebug() << m_smtp_port;
+    writeLog(QString("%1").arg(m_smtp_port));
+
+    smtp.connectToHost();
+    if (!smtp.waitForReadyConnected())
+    {
+        writeLog("Connection Failed");
+        return;
+    }
+
+    smtp.login(m_login, m_password);
+    if (!smtp.waitForAuthenticated())
+    {
+        writeLog("Authentification Failed");
+        return;
+    }
+
+    smtp.sendMail(message);
+    if (!smtp.waitForMailSent())
+    {
+        writeLog("Mail sending failed");
+        return;
+    }
+    else
+    {
+        writeLog("The email was succesfully sent.");
+    }
+
+    smtp.quit();
+/*
+    for (auto file : files) {
+        delete file;
+    }
+
+    for (auto attachment : attachments) {
+        delete attachment;
+    }
+*/
 
 
+/*
+        // old method
     for(int i = 0; i < RecieversList.recievers.size(); i++) {
 
+        SmtpClient *smtp = new SmtpClient(m_smtp_server, m_smtp_port, SmtpClient::SslConnection);
+        smtp->setUser(m_login);
+        smtp->setPassword(m_password);
 
             // Create a MimeMessage
 
         MimeMessage message;
 
         EmailAddress sender(m_login, "Планировщик");
-        message.setSender(sender);
+        message.setSender(&sender);
 
         EmailAddress to(RecieversList.recievers[i], "Получатель");
-        message.addRecipient(to);
+        message.addRecipient(&to);
 
         message.setSubject("Задачи на сегодня");
 
@@ -291,32 +392,20 @@ void form::sendEmail()
 
              // Now we can send the mail
 
-        SmtpClient smtp(m_smtp_server, m_smtp_port, SmtpClient::SslConnection);
+        smtp->connectToHost();
+        smtp->login();
+        smtp->sendMail(message);
 
-        smtp.connectToHost();
-        if (!smtp.waitForReadyConnected()) {
-            writeLog("Failed to connect to host!");
-            return;
-        }
-        smtp.login(m_login,m_password);
-        if (!smtp.waitForAuthenticated()) {
-            writeLog("Failed to login!");
-            return;
-        }
-        smtp.sendMail(message);
-        if (!smtp.waitForMailSent()) {
-            writeLog("Failed to send a mail!");
-            return;
-        }
+        smtp->quit();
 
-        smtp.quit();
-        writeLog("Message is sent!");
-
+        delete smtp;
     }
+*/
 }
 
 void form::writeLog(QString message)
 {
+    qDebug() << message;
     QString filename = QDir::currentPath() + "/log/" + m_log_name;
     QFile file(m_log_name);
     file.open(QIODevice::Append);
