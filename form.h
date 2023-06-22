@@ -45,6 +45,8 @@ public slots:
 private slots:
     void OnTimer();
 
+    void checkDateForSendEmail();
+
     void on_action_triggered();
     void on_action_2_triggered();
     void slotPopup(const QPoint &);
@@ -52,7 +54,7 @@ private slots:
 
     void on_tableWidget_cellPressed(int row, int column);
 
-    void sendEmail();
+    bool sendEmail();
 
     void writeLog(QString message);
 
@@ -66,6 +68,7 @@ private:
     Ui::form *ui;
 
     QTimer *timer;
+    QTimer *timer_notification;
     PopUp *pop;
     void closeEvent(QCloseEvent *event);
 
@@ -75,12 +78,15 @@ private:
 
     int PopupPeriod;
 
+    bool m_spam;
     QString m_log_name;
 
     QString m_smtp_server;
     qint32 m_smtp_port;
     QString m_login;
     QString m_password;
+    QString m_system_name;
+    QString m_sender_name;
 
 
 };

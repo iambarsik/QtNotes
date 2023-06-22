@@ -1,6 +1,11 @@
 #include "form.h"
 #include "ui_form.h"
 
+#include <QNetworkAccessManager>
+#include <QNetworkRequest>
+#include <QNetworkReply>
+#include <QEventLoop>
+
 form::form(QWidget *parent)
     : QMainWindow(parent)
     , ui(new Ui::form)
@@ -15,24 +20,32 @@ form::form(QWidget *parent)
 
     if(!QFile::exists(SettingsName))    {
         settings.beginGroup("MAIN_SETTINGS");
+        settings.setValue("sending","true");
         settings.setValue("server","smtp.mail.ru");
         settings.setValue("port",465);
         settings.setValue("login","");
         settings.setValue("password","");
         settings.setValue("note_period","60");
+        settings.setValue("system_name","Планировщик задач");
+        settings.setValue("sender_name","Имя не указано");
         settings.endGroup();
     }
     settings.beginGroup("MAIN_SETTINGS");
+    m_spam        = (settings.value("sending", false)).toBool();
     m_smtp_server = (settings.value("server", "smtp.mail.ru")).toString();
     m_smtp_port   = (settings.value("port", 465)).toInt();
     m_login       = (settings.value("login", "")).toString();
     m_password    = (settings.value("password", "")).toString();
     PopupPeriod   = (settings.value("note_period", 60)).toInt();
+    m_system_name = (settings.value("system_name", "Планировщик задач")).toString();
+    m_sender_name = (settings.value("sender_name", "Имя не указано")).toString();
     settings.endGroup();
 
-    if(m_login.isEmpty() || m_password.isEmpty())   {
-        QMessageBox::warning(this, "Внимание!", "Настройте параметры сети в config.ini. Приложение будет закрыто.", QMessageBox::Yes);
-        exit(0);
+    if(m_spam == true)  {
+        if(m_login.isEmpty() || m_password.isEmpty())   {
+            QMessageBox::warning(this, "Внимание!", "Настройте параметры сети в config.ini. Приложение будет закрыто.", QMessageBox::Yes);
+            exit(0);
+        }
     }
 
     QDate log_date = QDate::currentDate();
@@ -52,59 +65,35 @@ form::form(QWidget *parent)
 
     timer = new QTimer();
     connect(timer,&QTimer::timeout,this,&form::OnTimer);
-
-    timer->setInterval(PopupPeriod*1000);
-    //timer->setInterval(30000);
+    //timer->setInterval(300*1000);
+    timer->setInterval(30*1000);
     timer->start();
+
+    timer_notification = new QTimer();
+    connect(timer_notification,&QTimer::timeout,this,[&](){
+        pop->setPopupText("У вас есть незавершённые задачи,\n запланированные на сегодня. \n Проверьте, чтоб не забыть!");
+        pop->show();
+    });
+    timer_notification->setInterval(PopupPeriod*1000);
+    timer_notification->start();
 
     randomMessages.append("Говорят, что чёрные кошки к несчастью\n Наверное, у этих глупышей просто не было чёрной кошки");
 
-    if(!QFile::exists("current.dt"))    {
-        bNeedToEMail = true;
-        QFile file("current.dt");
-        file.open(QIODevice::WriteOnly);
-        QDate dt = QDate::currentDate();
-        QTextStream out(&file);
-        out.setCodec(QTextCodec::codecForName("UTF-8"));
-        out << QString("%1.%2.%3").arg(dt.day()).arg(dt.month()).arg(dt.year());
-        file.close();
-    } else {
-        QFile file;
-        file.setFileName("current.dt");
-        if(file.open(QFile::ReadOnly))  {
-            QTextStream out(&file);
-            out.setCodec(QTextCodec::codecForName("UTF-8"));
-            QString line;
-            out.readLineInto(&line);
-            file.close();
-            date_t d;
-            d.fromString(line);
-            QDate dt = QDate::currentDate();
-            if(d.day == dt.day() &&
-               d.month == dt.month() &&
-               d.year == dt.year())
-            {
-                bNeedToEMail = false;
-            } else {
-                bNeedToEMail = true;
-            }
+    checkDateForSendEmail();
 
-        } else {
-            bNeedToEMail = true;
-        }
-    }    
     this->setWindowIcon(QIcon(":/images/app.ico"));
 
     writeLog(" ============ Начало работы =============");
     qDebug() << QSslSocket::supportsSsl() << QSslSocket::sslLibraryBuildVersionString() << QSslSocket::sslLibraryVersionString();
 
     refreshTable();
-
 }
 
 form::~form()
 {
     delete ui;
+
+    writeLog(" ============ Конец работы ==============");
 }
 
 void form::refreshTable()
@@ -142,9 +131,35 @@ void form::refreshTable()
 
     if(bNeedToEMail == true)    {
         if(events_list_current.size() > 0)  {
-            sendEmail();
+            bNeedToEMail = !sendEmail();
         }
-        bNeedToEMail = false;
+            // если сообщение отправилось, то меняем дату
+        if(bNeedToEMail == false)   {
+            QFile file("current.dt");
+            file.open(QIODevice::WriteOnly);
+            QDate dt = QDate::currentDate();
+            QTextStream out(&file);
+            out.setCodec(QTextCodec::codecForName("UTF-8"));
+            out << QString("%1.%2.%3").arg(dt.day()).arg(dt.month()).arg(dt.year());
+            file.close();
+        }
+    } else {
+
+    }
+}
+
+void form::OnTimer()
+{
+    if(EditorFrom.events_list_main.size() > 0)  {
+        checkDateForSendEmail();
+        refreshTable();
+    }    
+}
+
+void form::checkDateForSendEmail()
+{
+    if(!QFile::exists("current.dt"))    {
+        bNeedToEMail = true;
         QFile file("current.dt");
         file.open(QIODevice::WriteOnly);
         QDate dt = QDate::currentDate();
@@ -152,19 +167,37 @@ void form::refreshTable()
         out.setCodec(QTextCodec::codecForName("UTF-8"));
         out << QString("%1.%2.%3").arg(dt.day()).arg(dt.month()).arg(dt.year());
         file.close();
+    } else {
+        QFile file;
+        file.setFileName("current.dt");
+        if(file.open(QFile::ReadOnly))  {
+            QTextStream out(&file);
+            out.setCodec(QTextCodec::codecForName("UTF-8"));
+            QString line;
+            out.readLineInto(&line);
+            file.close();
+            date_t d;
+            d.fromString(line);
+            QDate dt = QDate::currentDate();
+            if(d.day == dt.day() &&
+               d.month == dt.month() &&
+               d.year == dt.year())
+            {
+                bNeedToEMail = false;
+            } else {
+                //QFile file("current.dt");
+                //file.open(QIODevice::WriteOnly);
+                //QDate dt = QDate::currentDate();
+                //QTextStream out(&file);
+                //out.setCodec(QTextCodec::codecForName("UTF-8"));
+                //out << QString("%1.%2.%3").arg(dt.day()).arg(dt.month()).arg(dt.year());
+                //file.close();
+                bNeedToEMail = true;
+            }
+        } else {
+            bNeedToEMail = true;
+        }
     }
-}
-
-void form::OnTimer()
-{
-    if(EditorFrom.events_list_main.size() > 0)  {
-        refreshTable();
-    }
-    if(events_list_current.size() > 0)  {
-        pop->setPopupText("У вас есть незавершённые задачи,\n запланированные на сегодня. \n Проверьте, чтоб не забыть!");
-        pop->show();
-    }
-
 }
 
 
@@ -247,15 +280,29 @@ void form::closeEvent(QCloseEvent *event)
     }
 }
 
-
-void form::sendEmail()
+bool form::sendEmail()
 {
-    if(RecieversList.recievers.size() <= 0) {
-        writeLog("Нет ни одного получателя. Сообщение не отправлено.");
-        return;
+    if(m_spam == false) {
+        return false;
     }
 
-    EmailAddress sender = EmailAddress(m_login, "Планировщик задач");
+    QNetworkAccessManager nam;
+    QNetworkRequest req(QUrl("http://www.google.com"));
+    QNetworkReply *reply = nam.get(req);
+    QEventLoop loop;
+    connect(reply, SIGNAL(finished()), &loop, SLOT(quit()));
+    loop.exec();
+    if(!reply->bytesAvailable())    {
+        writeLog("Отсутствует интернет соединение. Рассылка не отправлена.");
+        return false;
+    }
+
+    if(RecieversList.recievers.size() <= 0) {
+        writeLog("Нет ни одного получателя. Сообщение не отправлено.");
+        return false;
+    }
+
+    EmailAddress sender = EmailAddress(m_login, m_system_name);
     QString subject = "Задачи на сегодня";
 
     QDate d = QDate::currentDate();
@@ -265,13 +312,13 @@ void form::sendEmail()
     html += "<h2><b> Перечень запланированных задач на сегодня: </b></h2><p><ul>";
     for(int i = 0; i < events_list_current.size(); i++) {
         if(dt > events_list_current[i].Date)    {
-            html += "<h5><font color=FF0000> !!!ПРОСРОЧЕНО!!! - " + events_list_current[i].Text + "</font></h5>";
+            html += "<p><h5><font color=FF0000> !!!ПРОСРОЧЕНО!!! - " + events_list_current[i].Text + "</font></h5>";
         } else {
-            html += "<h5><font color=000000>" + events_list_current[i].Text + "</font></h5>";
+            html += "<p><h5><font color=000000>" + events_list_current[i].Text + "</font></h5>";
         }
     }
     html += "</ul>";
-    html += "<h4>Примечание:</h4> отправлено рассылкой SMTP из приложения QtNotes c аккаунта \"" + m_login + "\"";
+    html += "<h4>Примечание:</h4> Отправитель <b>\"" + m_sender_name + "\"</b>";
 
     SmtpClient smtp(m_smtp_server, m_smtp_port, SmtpClient::SslConnection);
     MimeMessage message;
@@ -299,41 +346,38 @@ void form::sendEmail()
     }
     */
 
-    qDebug() << m_login;
-    writeLog(m_login);
-    qDebug() << m_password;
-    writeLog(m_password);
-    qDebug() << m_smtp_server;
-    writeLog(m_smtp_server);
-    qDebug() << m_smtp_port;
-    writeLog(QString("%1").arg(m_smtp_port));
+    writeLog(QString("Отправляю с %1 по %2 на %3 порт").arg(m_login).arg(m_smtp_server).arg(m_smtp_port));
+    //writeLog(m_password);
+    //writeLog(m_smtp_server);
+    //writeLog(QString("%1").arg(m_smtp_port));
 
     smtp.connectToHost();
     if (!smtp.waitForReadyConnected())
     {
-        writeLog("Connection Failed");
-        return;
+        writeLog("Ошибка соединения SMTP");
+        return false;
     }
 
     smtp.login(m_login, m_password);
     if (!smtp.waitForAuthenticated())
     {
-        writeLog("Authentification Failed");
-        return;
+        writeLog("Ошибка аутентификации");
+        return false;
     }
 
     smtp.sendMail(message);
     if (!smtp.waitForMailSent())
     {
-        writeLog("Mail sending failed");
-        return;
+        writeLog("Ошибка отправки сообщения");
+        return false;
     }
     else
     {
-        writeLog("The email was succesfully sent.");
+        writeLog("Сообщение успешно отправлено");
     }
 
     smtp.quit();
+
 /*
     for (auto file : files) {
         delete file;
@@ -343,65 +387,7 @@ void form::sendEmail()
         delete attachment;
     }
 */
-
-
-/*
-        // old method
-    for(int i = 0; i < RecieversList.recievers.size(); i++) {
-
-        SmtpClient *smtp = new SmtpClient(m_smtp_server, m_smtp_port, SmtpClient::SslConnection);
-        smtp->setUser(m_login);
-        smtp->setPassword(m_password);
-
-            // Create a MimeMessage
-
-        MimeMessage message;
-
-        EmailAddress sender(m_login, "Планировщик");
-        message.setSender(&sender);
-
-        EmailAddress to(RecieversList.recievers[i], "Получатель");
-        message.addRecipient(&to);
-
-        message.setSubject("Задачи на сегодня");
-
-            // Add some text
-        MimeText text;
-
-        QString str;
-        for(int i = 0; i < events_list_current.size(); i++) {
-            str += events_list_current[i].Text + "\n";
-        }
-
-        text.setText("Перечень задач:\n\n " + str);
-
-
-        message.addPart(&text);
-
-            // Now we create the attachment object
-        //MimeAttachment attachment (new QFile(QCoreApplication::applicationDirPath() + "/Octalife.jpg"));
-
-            // the file type can be setted. (by default is application/octet-stream)
-        //attachment.setContentType("image/jpg");
-
-            // Now add it to message
-        //message.addPart(&attachment);
-
-            // Add an another attachment
-            // MimeAttachment document(new QFile("document.pdf"));
-            // message.addPart(&document);
-
-             // Now we can send the mail
-
-        smtp->connectToHost();
-        smtp->login();
-        smtp->sendMail(message);
-
-        smtp->quit();
-
-        delete smtp;
-    }
-*/
+    return true;
 }
 
 void form::writeLog(QString message)
